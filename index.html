@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PokéSteals</title>
+<style>
+:root{--bg:#f6f7fb;--card:#fff;--tx:#14161f;--mu:#6b7280;--ac:#e63946;--ok:#16a34a;--wa:#d97706;--bd:#e5e7eb}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1117;--card:#181b24;--tx:#eef0f6;--mu:#9aa1b2;--bd:#272b38}}
+*{box-sizing:border-box}body{margin:0;font:15px system-ui,sans-serif;background:var(--bg);color:var(--tx)}
+header{padding:18px 16px 6px;max-width:1200px;margin:auto}h1{margin:0;font-size:24px}h1 span{color:var(--ac)}
+.wrap{max-width:1200px;margin:auto;padding:8px 16px 40px}
+.banner{padding:10px 14px;border-radius:10px;margin:10px 0;border:1px solid var(--bd);background:var(--card);color:var(--mu);font-size:14px}
+.banner.bad{border-color:var(--wa);color:var(--wa)}.banner.good{border-color:var(--ok);color:var(--ok)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+.chip,input,select{padding:8px 12px;border-radius:999px;border:1px solid var(--bd);background:var(--card);color:var(--tx);font:inherit}
+.chip{cursor:pointer}.chip.on{background:var(--ac);color:#fff;border-color:var(--ac)}input{flex:1;min-width:140px;border-radius:10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
+.c{background:var(--card);border:1px solid var(--bd);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+.c img{width:100%;aspect-ratio:4/3;object-fit:cover;background:var(--bd)}.b{padding:12px;display:flex;flex-direction:column;gap:6px;flex:1}
+.t{font-weight:600;line-height:1.25}.m{color:var(--mu);font-size:13px}.row{display:flex;justify-content:space-between;align-items:center}
+.sc{font-weight:700;padding:3px 10px;border-radius:999px;color:#fff;background:var(--mu)}.sc.hi{background:var(--ok)}.sc.mid{background:var(--wa)}
+.fl{color:var(--ac);font-size:12px}a.btn{margin-top:auto;text-align:center;padding:9px;border-radius:10px;background:var(--tx);color:var(--bg);text-decoration:none;font-weight:600}
+.empty{text-align:center;color:var(--mu);padding:50px 10px}
+</style></head><body>
+<header><h1>Poké<span>Steals</span></h1></header>
+<div class="wrap">
+<div id="status" class="banner">Loading…</div>
+<div class="bar" id="cats"></div>
+<div class="bar">
+ <input id="q" placeholder="Search title…">
+ <select id="sort"><option value="score">Best deals</option><option value="new">Newest</option></select>
+ <select id="min"><option value="">Any score</option><option value="30">30+</option><option value="50">50+</option><option value="70">70+</option></select>
+ <label class="chip"><input type="checkbox" id="sus" style="min-width:0;flex:none"> Hide suspicious</label>
+</div>
+<div class="grid" id="grid"></div>
+</div>
+<script>
+// Paste your Supabase Project URL and the *anon public* key (safe to expose; RLS makes it read-only).
+const SB="https://wdtrofkvjsvsefobknet.supabase.co", KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndkdHJvZmt2anN2c2Vmb2JrbmV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ1MTI4MzEsImV4cCI6MjExMDA4ODgzMX0.t2CJ0FyUzcm7ONmnFey5r9BBu8zeeM7WJzAQ9HGgbRQ";
+const api=p=>fetch(`${SB}/rest/v1/${p}`,{headers:{apikey:KEY,authorization:`Bearer ${KEY}`}}).then(r=>{if(!r.ok)throw new Error(r.status);return r.json()});
+const CATS=[["","All"],["card","Cards"],["sealed","Sealed"],["etb","ETBs"],["box","Booster boxes"],["collection","Collections"]];
+let cat="";const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const safeUrl=u=>/^https:\/\//.test(u||"")?esc(u):"";
+$("cats").innerHTML=CATS.map(([v,l])=>`<button class="chip${v===cat?" on":""}" data-v="${v}">${l}</button>`).join("");
+$("cats").onclick=e=>{if(e.target.dataset.v===undefined)return;cat=e.target.dataset.v;[...$("cats").children].forEach(b=>b.classList.toggle("on",b.dataset.v===cat));load()};
+["q","sort","min","sus"].forEach(i=>$(i).oninput=()=>{clearTimeout(window.t);window.t=setTimeout(load,250)});
+async function status(){
+ const b=$("status");
+ try{const [l]=await api("scans?select=*&order=id.desc&limit=1");
+  if(!l){b.className="banner bad";b.textContent="No scan has run yet.";return}
+  b.className="banner "+(l.ok?"good":"bad");
+  b.textContent=`Last scan ${new Date(l.at).toLocaleString()}: ${l.ok?`${l.found} found, ${l.added} new`:l.message}`;
+ }catch(e){b.className="banner bad";b.textContent="Cannot reach database. Check the Supabase URL/key in index.html."}
+}
+async function load(){
+ let p="listings?select=*&limit=200";
+ if(cat)p+=`&category=eq.${cat}`;
+ if($("min").value)p+=`&score=gte.${$("min").value}`;
+ if($("sus").checked)p+="&suspicious=eq.false";
+ if($("q").value.trim())p+=`&title=ilike.*${encodeURIComponent($("q").value.trim().replace(/[*,()]/g," "))}*`;
+ p+=$("sort").value==="new"?"&order=first_seen.desc":"&order=score.desc.nullslast";
+ let r=[];try{r=await api(p)}catch(e){}
+ $("grid").innerHTML=r.length?r.map(x=>{
+  const cls=x.score>=70?"hi":x.score>=40?"mid":"",fl=x.flags||[],u=safeUrl(x.url),im=safeUrl(x.image);
+  return `<div class="c"><img loading="lazy" src="${im}" alt=""><div class="b">
+  <div class="row"><b>$${(+x.price).toFixed(2)}${+x.shipping?` <span class="m">+$${(+x.shipping).toFixed(2)} ship</span>`:""}</b>
+  <span class="sc ${cls}">${x.score==null?"No market data":x.score}</span></div>
+  <div class="t">${esc(x.title)}</div>
+  <div class="m">${esc(x.category)}${x.market?` · market $${(+x.market).toFixed(2)} (${esc(x.market_src)})`:""}${x.discount>0?` · ${Math.round(x.discount*100)}% below`:""}</div>
+  ${fl.length?`<div class="fl">⚠ ${fl.map(esc).join(" · ")}</div>`:""}
+  ${u?`<a class="btn" href="${u}" target="_blank" rel="noopener">View on Vinted</a>`:""}</div></div>`}).join("")
+ :`<div class="empty" style="grid-column:1/-1">No listings yet. Nothing is shown until a real feed is connected and scanned.</div>`;
+}
+status();load();setInterval(()=>{status();load()},60000);
+</script></body></html>
