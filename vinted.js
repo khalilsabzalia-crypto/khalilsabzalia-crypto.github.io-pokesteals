@@ -1,29 +1,72 @@
-// Low-volume Vinted US fetcher. Uses Vinted's undocumented web endpoint, so the response shape
-// may change; if so, scan.js logs the error to the `scans` table and the dashboard banner.
-const BASE = "https://www.vinted.com";
-const UA = process.env.VINTED_UA || "PokeSteals/1.0 (contact: ksabz2010@gmail.com)";
-const QUERIES = (process.env.VINTED_QUERIES || "pokemon card,pokemon elite trainer box,pokemon booster box,pokemon collection").split(",");
-const sleep = ms => new Promise(r => setTimeout(r, ms));
+// PokéSteals Vinted connector.
+// Uses ONLY the Vinted-approved feed/API endpoint configured in GitHub Actions.
+// It deliberately does not call undocumented catalog endpoints or attempt to bypass 403 responses.
+
+const FEED_URL = (process.env.VINTED_FEED_URL || "").trim();
+const FEED_TOKEN = (process.env.VINTED_FEED_TOKEN || "").trim();
+
+function first(...values) {
+  return values.find(v => v !== undefined && v !== null && v !== "");
+}
+
+function normalize(item) {
+  const id = first(item.id, item.item_id, item.external_id);
+  const title = first(item.title, item.name);
+  const rawPrice = first(item.price, item.amount, item.price?.amount);
+  const price = Number(typeof rawPrice === "object" ? rawPrice.amount : rawPrice);
+  if (id == null || !title || !Number.isFinite(price)) return null;
+
+  const image = first(item.image, item.photo?.url, item.photos?.[0]?.url, item.images?.[0]?.url);
+  const rawUrl = first(item.url, item.web_url, item.path);
+  return {
+    id: String(id),
+    title: String(title),
+    price,
+    shipping: Number(first(item.shipping, item.shipping_price, 0)) || 0,
+    url: rawUrl ? (String(rawUrl).startsWith("http") ? String(rawUrl) : null) : null,
+    image: image ? String(image) : null,
+    seller: first(item.seller, item.user?.login, item.seller?.username) ?? null,
+    seller_reviews: Number.isFinite(Number(first(item.seller_reviews, item.user?.feedback_count)))
+      ? Number(first(item.seller_reviews, item.user?.feedback_count)) : null,
+    seller_rating: Number.isFinite(Number(first(item.seller_rating, item.user?.rating)))
+      ? Number(first(item.seller_rating, item.user?.rating)) : null,
+    photos: Number(first(item.photos_count, item.photo_count, item.photos?.length, item.images?.length, image ? 1 : 0))
+  };
+}
 
 async function fetchVinted() {
-  const home = await fetch(BASE + "/", { headers: { "user-agent": UA } });
-  const cookie = (home.headers.getSetCookie?.() || []).map(c => c.split(";")[0]).join("; ");
-  const seen = new Map();
-  for (const q of QUERIES) {
-    await sleep(3000); // be gentle: one request every few seconds
-    const r = await fetch(`${BASE}/api/v2/catalog/items?search_text=${encodeURIComponent(q.trim())}&order=newest_first&per_page=96&page=1`,
-      { headers: { "user-agent": UA, cookie, accept: "application/json" } });
-    if (r.status === 401 || r.status === 403 || r.status === 429)
-      throw new Error(`Vinted blocked/limited the request (${r.status}). Stopping. Try a different network or ask Vinted for a feed.`);
-    if (!r.ok) throw new Error(`Vinted returned ${r.status}`);
-    for (const it of (await r.json()).items || []) {
-      const price = +(it.price?.amount ?? it.price);
-      if (!it.id || !it.title || !isFinite(price)) continue;
-      seen.set(String(it.id), { id: it.id, title: it.title, price, shipping: 0,
-        url: it.url?.startsWith("http") ? it.url : BASE + (it.path || ""), image: it.photo?.url || null,
-        seller: it.user?.login || null, seller_reviews: null, seller_rating: null, photos: it.photo ? 1 : 0 });
-    }
+  if (!FEED_URL) {
+    throw new Error("No approved Vinted feed configured. Add the feed URL supplied/approved by Vinted as the VINTED_FEED_URL GitHub Actions secret.");
   }
-  return [...seen.values()];
+
+  let parsed;
+  try {
+    const response = await fetch(FEED_URL, {
+      headers: FEED_TOKEN ? { authorization: `Bearer ${FEED_TOKEN}`, accept: "application/json" } : { accept: "application/json" }
+    });
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        throw new Error(`The approved Vinted feed denied access (HTTP ${response.status}). Verify the feed URL/token with Vinted; the scanner stopped without retrying.`);
+      }
+      if (response.status === 429) {
+        throw new Error("The approved Vinted feed rate-limited the scan (HTTP 429). Respect its published limits and retry schedule.");
+      }
+      throw new Error(`The approved Vinted feed returned HTTP ${response.status}.`);
+    }
+    parsed = await response.json();
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error("The approved Vinted feed did not return valid JSON.");
+    throw error;
+  }
+
+  const sourceItems = Array.isArray(parsed) ? parsed
+    : Array.isArray(parsed.items) ? parsed.items
+    : Array.isArray(parsed.data) ? parsed.data
+    : null;
+  if (!sourceItems) {
+    throw new Error("Feed format not recognized. Expected a JSON array or an object containing an items[] or data[] array.");
+  }
+  return sourceItems.map(normalize).filter(Boolean);
 }
+
 module.exports = { fetchVinted };
