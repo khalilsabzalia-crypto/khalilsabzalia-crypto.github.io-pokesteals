@@ -1,7 +1,7 @@
 // Low-volume Vinted US fetcher. Uses Vinted's undocumented web endpoint, so the response shape
 // may change; if so, scan.js logs the error to the `scans` table and the dashboard banner.
 const BASE = "https://www.vinted.com";
-const UA = process.env.VINTED_UA || "PokeSteals/1.0 (contact: YOUR_EMAIL)";
+const UA = process.env.VINTED_UA || "PokeSteals/1.0 (contact: ksabz2010@gmail.com)";
 const QUERIES = (process.env.VINTED_QUERIES || "pokemon card,pokemon elite trainer box,pokemon booster box,pokemon collection").split(",");
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
