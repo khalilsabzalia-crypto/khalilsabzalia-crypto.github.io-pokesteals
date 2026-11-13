@@ -21,16 +21,23 @@ header{padding:18px 16px 6px;max-width:1200px;margin:auto}h1{margin:0;font-size:
 .sc{font-weight:700;padding:3px 10px;border-radius:999px;color:#fff;background:var(--mu)}.sc.hi{background:var(--ok)}.sc.mid{background:var(--wa)}
 .fl{color:var(--ac);font-size:12px}a.btn{margin-top:auto;text-align:center;padding:9px;border-radius:10px;background:var(--tx);color:var(--bg);text-decoration:none;font-weight:600}
 .empty{text-align:center;color:var(--mu);padding:50px 10px}
+.boxes{display:flex;gap:8px}.bx{flex:1;border:1px solid var(--bd);border-radius:10px;padding:6px 10px;text-align:center}.bx small{display:block;color:var(--mu);font-size:11px}.bx b{font-size:18px}.bx.gain b{color:var(--ok)}.bx.loss b{color:var(--ac)}
+.tiers{display:flex;flex-wrap:wrap;gap:4px;font-size:11px}.tiers span{padding:2px 6px;border-radius:6px;border:1px solid var(--bd);color:var(--mu)}.tiers span.on{background:var(--tx);color:var(--bg);border-color:var(--tx)}
+.tag{display:inline-block;font-size:12px;padding:2px 8px;border-radius:999px;background:var(--ok);color:#fff}.tm{font-size:12px;color:var(--mu);line-height:1.5}
+.meter{height:8px;border-radius:99px;background:var(--bd);overflow:hidden;margin-top:8px}.meter i{display:block;height:100%;width:0;background:var(--ok);transition:width .4s}
 </style></head><body>
-<header><h1>Poké<span>Steals</span></h1></header>
+<header style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h1>Poké<span>Steals</span></h1><span style="display:flex;gap:8px;flex-wrap:wrap"><button id="pausebtn" class="chip" onclick="pauseToggle()">Pause auto-scan</button><button id="scanbtn" class="chip on" onclick="scanNow()">Scan now</button></span></header>
 <div class="wrap">
+<div id="pause" class="banner bad" style="display:none">⏸ Auto-scan is paused. Scheduled scans are off, but Scan now still works.</div>
+<div id="usage" class="banner" style="display:none"><span id="utxt"></span><div class="meter"><i id="ubar"></i></div></div>
 <div id="status" class="banner">Loading…</div>
 <div class="bar" id="cats"></div>
 <div class="bar">
  <input id="q" placeholder="Search title…">
- <select id="sort"><option value="score">Best deals</option><option value="new">Newest</option></select>
+ <select id="sort"><option value="score">Best deals</option><option value="new">Newest</option><option value="profit">Most profit</option></select>
  <select id="min"><option value="">Any score</option><option value="30">30+</option><option value="50">50+</option><option value="70">70+</option></select>
  <label class="chip"><input type="checkbox" id="sus" style="min-width:0;flex:none"> Hide suspicious</label>
+ <label class="chip"><input type="checkbox" id="una" style="min-width:0;flex:none"> Unaware sellers only</label>
 </div>
 <div class="grid" id="grid"></div>
 </div>
@@ -44,7 +51,7 @@ const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&g
 const safeUrl=u=>/^https:\/\//.test(u||"")?esc(u):"";
 $("cats").innerHTML=CATS.map(([v,l])=>`<button class="chip${v===cat?" on":""}" data-v="${v}">${l}</button>`).join("");
 $("cats").onclick=e=>{if(e.target.dataset.v===undefined)return;cat=e.target.dataset.v;[...$("cats").children].forEach(b=>b.classList.toggle("on",b.dataset.v===cat));load()};
-["q","sort","min","sus"].forEach(i=>$(i).oninput=()=>{clearTimeout(window.t);window.t=setTimeout(load,250)});
+["q","sort","min","sus","una"].forEach(i=>$(i).oninput=()=>{clearTimeout(window.t);window.t=setTimeout(load,250)});
 async function status(){
  const b=$("status");
  try{const [l]=await api("scans?select=*&order=id.desc&limit=1");
@@ -53,24 +60,77 @@ async function status(){
   b.textContent=`Last scan ${new Date(l.at).toLocaleString()}: ${l.ok?`${l.found} found, ${l.added} new`:l.message}`;
  }catch(e){b.className="banner bad";b.textContent="Cannot reach database. Check the Supabase URL/key in index.html."}
 }
+async function scanNow(){
+ let pin=null;try{pin=localStorage.getItem("pin")}catch(e){}
+ if(!pin)pin=prompt("Enter your scan PIN");
+ if(!pin)return;
+ const b=$("scanbtn");b.disabled=true;b.textContent="Starting…";
+ try{
+  const r=await fetch(SB+"/functions/v1/scan-now",{method:"POST",headers:{"content-type":"application/json",apikey:KEY,authorization:"Bearer "+KEY},body:JSON.stringify({pin})});
+  const d=await r.json().catch(()=>({}));
+  if(r.ok){try{localStorage.setItem("pin",pin)}catch(e){}
+   b.textContent="Scan started ✓ (about 1–2 min)";
+   [70000,130000].forEach(t=>setTimeout(()=>{status();load();usage()},t));
+  }else{if(r.status===401){try{localStorage.removeItem("pin")}catch(e){}}alert(d.error||"Could not start the scan");b.textContent="Scan now"}
+ }catch(e){alert("Could not reach the scanner");b.textContent="Scan now"}
+ setTimeout(()=>{b.disabled=false;b.textContent="Scan now"},60000);
+}
+let paused=false;
+async function state(){
+ try{const [s]=await api("settings?select=paused&id=eq.1");paused=!!(s&&s.paused);
+  $("pausebtn").textContent=paused?"Resume auto-scan":"Pause auto-scan";
+  $("pausebtn").classList.toggle("on",paused);
+  $("pause").style.display=paused?"block":"none";
+ }catch(e){}
+}
+async function pauseToggle(){
+ let pin=null;try{pin=localStorage.getItem("pin")}catch(e){}
+ if(!pin)pin=prompt("Enter your scan PIN");
+ if(!pin)return;
+ const b=$("pausebtn");b.disabled=true;
+ try{
+  const r=await fetch(SB+"/functions/v1/scan-now",{method:"POST",headers:{"content-type":"application/json",apikey:KEY,authorization:"Bearer "+KEY},body:JSON.stringify({pin,action:paused?"resume":"pause"})});
+  const d=await r.json().catch(()=>({}));
+  if(r.ok){try{localStorage.setItem("pin",pin)}catch(e){}await state()}
+  else{if(r.status===401){try{localStorage.removeItem("pin")}catch(e){}}alert(d.error||"Could not change the schedule")}
+ }catch(e){alert("Could not reach the scanner")}
+ b.disabled=false;
+}
+async function usage(){
+ try{const [u]=await api("usage?select=*&id=eq.1"),b=$("usage");
+  if(!u){b.style.display="none";return}
+  const left=Math.max(0,u.limit_usd-u.used),pct=Math.max(0,Math.min(100,left/u.limit_usd*100));
+  $("utxt").textContent=`Apify credit left this month: $${left.toFixed(2)} of $${(+u.limit_usd).toFixed(2)}`+(u.cycle_end?` · resets ${new Date(u.cycle_end).toLocaleDateString()}`:"");
+  const bar=$("ubar");bar.style.width=pct+"%";bar.style.background=pct>50?"var(--ok)":pct>20?"var(--wa)":"var(--ac)";b.style.display="block";
+ }catch(e){}
+}
+const ago=t=>{if(!t)return null;const s=Math.max(0,(Date.now()-Date.parse(t))/1000);if(s<60)return"just now";const m=Math.floor(s/60);if(m<60)return m+" min ago";const h=Math.floor(m/60);if(h<24)return h+(h===1?" hour":" hours")+" ago";const d=Math.floor(h/24);return d+(d===1?" day":" days")+" ago"};
+const clock=t=>new Date(t).toLocaleString([],{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"});
 async function load(){
  let p="listings?select=*&limit=200";
  if(cat)p+=`&category=eq.${cat}`;
  if($("min").value)p+=`&score=gte.${$("min").value}`;
  if($("sus").checked)p+="&suspicious=eq.false";
+ if($("una").checked)p+="&unaware=eq.true";
  if($("q").value.trim())p+=`&title=ilike.*${encodeURIComponent($("q").value.trim().replace(/[*,()]/g," "))}*`;
- p+=$("sort").value==="new"?"&order=first_seen.desc":"&order=score.desc.nullslast";
+ const so=$("sort").value;p+=so==="new"?"&order=first_seen.desc":so==="profit"?"&order=profit.desc.nullslast":"&order=score.desc.nullslast";
  let r=[];try{r=await api(p)}catch(e){}
  $("grid").innerHTML=r.length?r.map(x=>{
-  const cls=x.score>=70?"hi":x.score>=40?"mid":"",fl=x.flags||[],u=safeUrl(x.url),im=safeUrl(x.image);
+  const cls=x.score>=70?"hi":x.score>=40?"mid":"",fl=x.flags||[],hs=x.hints||[],pr=x.prices||{},u=safeUrl(x.url),im=safeUrl(x.image),pf=+x.profit;
+  const tiers=["nm","lp","mp","hp","dmg"].filter(k=>pr[k]!=null).map(k=>`<span class="${k===x.cond_tier?"on":""}">${k.toUpperCase()} $${(+pr[k]).toFixed(2)}</span>`).join("");
+  const found=x.first_seen?`Found ${ago(x.first_seen)} (${clock(x.first_seen)})`:"";
+  const listed=x.listed_at?`Listed on Vinted ${ago(x.listed_at)} (${clock(x.listed_at)})`:x.listed_after?`Listed on Vinted: est. between ${clock(x.listed_after)} and ${clock(x.first_seen)}`:"Vinted listing time: unknown";
   return `<div class="c"><img loading="lazy" src="${im}" alt=""><div class="b">
-  <div class="row"><b>$${(+x.price).toFixed(2)}${+x.shipping?` <span class="m">+$${(+x.shipping).toFixed(2)} ship</span>`:""}</b>
-  <span class="sc ${cls}">${x.score==null?"No market data":x.score}</span></div>
+  <div class="row"><b>$${(+x.price).toFixed(2)}${+x.shipping?` <span class="m">+$${(+x.shipping).toFixed(2)} fees</span>`:""}</b><span class="m">${esc(x.condition||"Condition unknown")}</span></div>
   <div class="t">${esc(x.title)}</div>
-  <div class="m">${esc(x.category)}${x.market?` · market $${(+x.market).toFixed(2)} (${esc(x.market_src)})`:""}${x.discount>0?` · ${Math.round(x.discount*100)}% below`:""}</div>
+  <div class="boxes"><div class="bx ${pf>0?"gain":"loss"}"><small>Est. profit</small><b>${pf>=0?"+":"-"}$${Math.abs(pf||0).toFixed(2)}</b></div><div class="bx"><small>Score</small><b class="sc ${cls}">${x.score}</b></div></div>
+  <div class="tiers">${tiers}</div>
+  <div class="m">Value ${esc(x.cond_tier||"").toUpperCase()}${x.discount>0?` · ${Math.round(x.discount*100)}% below value`:""} · ${esc(x.market_src||"exact card match")}</div>
+  ${x.unaware?`<div><span class="tag">Likely unaware seller</span></div>`:""}${hs.length?`<div class="m">${hs.map(esc).join(" · ")}</div>`:""}
+  <div class="tm">${esc(found)}<br>${esc(listed)}${x.seller?`<br>Seller: ${esc(x.seller)}`:""}</div>
   ${fl.length?`<div class="fl">⚠ ${fl.map(esc).join(" · ")}</div>`:""}
   ${u?`<a class="btn" href="${u}" target="_blank" rel="noopener">View on Vinted</a>`:""}</div></div>`}).join("")
- :`<div class="empty" style="grid-column:1/-1">No listings yet. Nothing is shown until a real feed is connected and scanned.</div>`;
+ :`<div class="empty" style="grid-column:1/-1">No qualifying deals right now. Only cards priced far below their value in the listed condition appear here.</div>`;
 }
-status();load();setInterval(()=>{status();load()},60000);
+status();load();usage();state();setInterval(()=>{status();load();usage();state()},60000);
 </script></body></html>
