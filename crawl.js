@@ -1,11 +1,13 @@
 // Free local crawler (Crawlee + Playwright). Run it from your own PC: node scan.js with VINTED_CRAWL=1.
 // Polite by design: one page at a time, a pause between pages, only a few search pages, no proxies or stealth tricks.
 const { PlaywrightCrawler } = require("crawlee");
+const PF = +process.env.VINTED_MIN_PRICE || 3; // skip $1-2 bulk commons
+const PT = +process.env.VINTED_MAX_PRICE || 60; // only list items up to this price (saves paid results)
 const URLS = (process.env.VINTED_URLS || [
-  "https://www.vinted.com/catalog?search_text=pokemon%20elite%20trainer%20box&order=newest_first",
-  "https://www.vinted.com/catalog?search_text=pokemon%20booster%20box&order=newest_first",
-  "https://www.vinted.com/catalog?search_text=pokemon%20card&order=newest_first",
-].join("|")).split("|").map(s => s.trim()).filter(Boolean);
+  "https://www.vinted.com/catalog?search_text=pokemon%20base%20set&order=newest_first",
+  "https://www.vinted.com/catalog?search_text=pokemon%20wotc&order=newest_first",
+  "https://www.vinted.com/catalog?search_text=pokemon%201999&order=newest_first",
+].map(u => `${u}&price_from=${PF}&price_to=${PT}`).join("|")).split("|").map(s => s.trim()).filter(Boolean);
 const MAX = +process.env.VINTED_MAX_RESULTS || 48; // listings kept per search page
 
 async function crawlVinted() {
