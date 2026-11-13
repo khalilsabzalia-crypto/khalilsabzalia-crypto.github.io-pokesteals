@@ -20,7 +20,9 @@ async function log(ok, found, added, message) {
 
 async function main() {
   let items;
-  if (process.env.VINTED_DIRECT === "1") items = await require("./vinted.js").fetchVinted();
+  if (process.env.VINTED_CRAWL === "1") items = await require("./crawl.js").crawlVinted();
+  else if (clean("APIFY_TOKEN")) items = await require("./apify.js").fetchApify();
+  else if (process.env.VINTED_DIRECT === "1") items = await require("./vinted.js").fetchVinted();
   else {
     if (!VINTED_FEED_URL) return log(false, 0, 0, "Scanner not connected: set VINTED_DIRECT=1 or VINTED_FEED_URL");
     const fr = await fetch(VINTED_FEED_URL, { headers: VINTED_FEED_TOKEN ? { authorization: `Bearer ${VINTED_FEED_TOKEN}` } : {} });
@@ -64,6 +66,8 @@ async function main() {
   const rows = [];
   for (const i of items) {
     if (!i.id || !i.title || typeof i.price !== "number") continue;
+    if (/sleeve|divider|deck box|playmat|toploader|top loader|binder page|plush|keychain|sticker|pin\b/i.test(i.title)
+      && !/elite trainer box|booster box|booster bundle/i.test(i.title)) continue; // accessories, not Pokémon product
     const category = categorize(i.title);
     const mk = category === "card" ? await cardMarket(i.title) : sealedMarket(i.title);
     const total = i.price + (i.shipping || 0), flags = [];

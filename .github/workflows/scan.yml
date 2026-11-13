@@ -1,7 +1,7 @@
 name: scan
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "0 */12 * * *"
   workflow_dispatch:
 jobs:
   scan:
@@ -17,5 +17,6 @@ jobs:
           VINTED_FEED_URL: ${{ secrets.VINTED_FEED_URL }}
           VINTED_FEED_TOKEN: ${{ secrets.VINTED_FEED_TOKEN }}
           POKEMONTCG_KEY: ${{ secrets.POKEMONTCG_KEY }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
           VINTED_DIRECT: ${{ secrets.VINTED_DIRECT }}
           VINTED_UA: ${{ secrets.VINTED_UA }}
