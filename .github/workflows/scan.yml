@@ -1,7 +1,11 @@
 name: scan
 on:
   schedule:
-    - cron: "0 */12 * * *"
+    # Times are UTC. 16:30, 18:00, 19:30, 21:00, 22:30 UTC = 8:30, 10:00, 11:30, 1:00, 2:30 Pacific (winter, UTC-8).
+    # When daylight saving starts (March), these become one hour earlier on the clock.
+    - cron: "30 16,22 * * *"
+    - cron: "0 18,21 * * *"
+    - cron: "30 19 * * *"
   workflow_dispatch:
 jobs:
   scan:
@@ -18,5 +22,12 @@ jobs:
           VINTED_FEED_TOKEN: ${{ secrets.VINTED_FEED_TOKEN }}
           POKEMONTCG_KEY: ${{ secrets.POKEMONTCG_KEY }}
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          DETAIL_MAX: ${{ secrets.DETAIL_MAX }}
+          DETAIL_MIN_SCORE: ${{ secrets.DETAIL_MIN_SCORE }}
+          VINTED_MAX_PRICE: ${{ secrets.VINTED_MAX_PRICE }}
+          VINTED_MIN_PRICE: ${{ secrets.VINTED_MIN_PRICE }}
+          VINTED_MAX_RESULTS: ${{ secrets.VINTED_MAX_RESULTS }}
+          MAX_PCT_OF_VALUE: ${{ secrets.MAX_PCT_OF_VALUE }}
+          MIN_PROFIT: ${{ secrets.MIN_PROFIT }}
           VINTED_DIRECT: ${{ secrets.VINTED_DIRECT }}
           VINTED_UA: ${{ secrets.VINTED_UA }}
