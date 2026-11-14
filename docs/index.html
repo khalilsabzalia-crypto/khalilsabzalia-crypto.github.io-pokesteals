@@ -57,7 +57,7 @@ async function status(){
  try{const [l]=await api("scans?select=*&order=id.desc&limit=1");
   if(!l){b.className="banner bad";b.textContent="No scan has run yet.";return}
   b.className="banner "+(l.ok?"good":"bad");
-  b.textContent=`Last scan ${new Date(l.at).toLocaleString()}: ${l.ok?`${l.found} found, ${l.added} new`:l.message}`;
+  b.textContent=`Last scan ${new Date(l.at).toLocaleString()}: ${l.ok?`${l.found} found, ${l.added} new. ${String(l.message||"").replace(/^ok: /,"")}`:l.message}`;
  }catch(e){b.className="banner bad";b.textContent="Cannot reach database. Check the Supabase URL/key in index.html."}
 }
 async function scanNow(){
