@@ -1,4 +1,5 @@
 // PokéSteals scanner. Runs in GitHub Actions or on your PC (Node 20+, no dependencies). Never invents listings.
+const T0 = Date.now();
 const clean = k => (process.env[k] || "").replace(/\s+/g, ""); // secrets pasted with stray newlines/spaces
 const SB = clean("SUPABASE_URL").replace(/\/+$/, ""), KEY = clean("SUPABASE_SERVICE_KEY"), VINTED_FEED_URL = clean("VINTED_FEED_URL"),
   VINTED_FEED_TOKEN = clean("VINTED_FEED_TOKEN"), POKEMONTCG_KEY = clean("POKEMONTCG_KEY");
@@ -49,18 +50,18 @@ async function tcg(q) {
 // cache key: v2:<card name>|<number>/<total>|<set year>|<set name>
 async function lookup(title) {
   const low = title.toLowerCase(), m = low.match(/(\d{1,3})\s*\/\s*(\d{1,3})/);
-  if (!m) return null; // no set number: can't identify the exact card, so don't price it
+  if (!m) return { reason: "no_set_number" }; // can't identify the exact card, so don't price it
   const tag = `|${+m[1]}/${+m[2]}|`, fresh = Date.now() - 3 * 864e5;
   const cached = () => prices.filter(p => p.keyword.startsWith("v2:") && p.keyword.includes(tag) && Date.parse(p.updated) > fresh);
   if (!cached().length) {
     const cards = await tcg(`number:${+m[1]} printedTotal:${+m[2]}`);
-    if (cards === null) return null; // lookup failed: unknown, not a verdict
+    if (cards === null) return { reason: "price_lookup_failed" }; // API error: unknown, not a verdict
     for (const c of cards) { const v = cardPrice(c); if (v) save(`v2:${c.name.toLowerCase()}${tag}${String(c.set?.releaseDate || "").slice(0, 4)}|${c.set?.name || ""}`, v); }
   }
   const named = cached().filter(p => nameIn(low, p.keyword.slice(3).split("|")[0]));
-  if (!named.length) return { unverified: true }; // set number matches no real, currently-priced card of that name
+  if (!named.length) return { reason: "number_matches_no_priced_card" }; // no real card of that name+number with a fresh price
   const old = named.filter(p => +p.keyword.split("|")[2] < VINTAGE_BEFORE);
-  if (!old.length) return null; // a real card, but not vintage: skip quietly
+  if (!old.length) return { reason: "not_vintage" }; // a real card, but newer than VINTAGE_BEFORE
   const best = old.reduce((a, b) => (+a.price <= +b.price ? a : b)); // if several match, take the cheapest
   const [, , year, set] = best.keyword.split("|");
   return { nm: +best.price, match: "number", set, year };
@@ -70,7 +71,7 @@ async function lookup(title) {
 function evaluate(i, mk, d) {
   const total = i.price + (i.shipping || 0), tier = TIER[(i.condition || "").toLowerCase().trim()] || "mp";
   const val = mk.nm * MULT[tier], pct = total / val, profit = val * (1 - FEE) - total;
-  if (total < val * 0.25 && mk.nm >= 30) return null; // priced under 25% of a $30+ card: almost always fake, custom, or mislabeled
+  if (total < val * 0.25 && mk.nm >= 30) return { keep: false, reason: "price_under_25pct_of_value_suspect" }; // almost always fake, custom, or mislabeled
   const flags = [], hints = [];
   if (!i.photos) flags.push("No photos");
   if (i.title.trim().split(/\s+/).length < 4) hints.push("Very short title");
@@ -78,7 +79,7 @@ function evaluate(i, mk, d) {
   if (mk.match === "name") hints.push("No set number given");
   if (i.price % 1 === 0 && i.price <= 10) hints.push("Round, low price");
   if (d?.description) {
-    if (INFORMED.test(d.description)) return null;
+    if (INFORMED.test(d.description)) return { keep: false, reason: "seller_cites_market_prices" };
     if (UNAWARE.test(d.description)) hints.push("Seller doesn't seem to know the value");
   }
   const unaware = hints.length >= 2;
@@ -92,7 +93,8 @@ function evaluate(i, mk, d) {
     discount: 1 - pct, profit: r2(profit), score, flags, suspicious: flags.length > 0, hints, unaware, last_seen: new Date().toISOString() };
   if (d) Object.assign(row, { seller: d.seller || null, listed_at: ago(d.uploaded, Date.parse(d.scraped_at) || Date.now()),
     description: (d.description || "").slice(0, 300), detailed: true });
-  return { row, keep: mk.nm >= MIN_VALUE && pct <= MAX_PCT && profit >= MIN_PROFIT };
+  const reason = mk.nm < MIN_VALUE ? "value_under_minimum" : pct > MAX_PCT ? "not_cheap_enough" : profit < MIN_PROFIT ? "profit_too_low" : null;
+  return { row, keep: !reason, reason };
 }
 
 async function apifyLeft() { // dollars of Apify credit left this month, or null if unknown
@@ -115,6 +117,7 @@ async function updateUsage() { // saves remaining Apify credit so the dashboard 
   } catch (e) { console.error("Usage check failed:", e.message); }
 }
 async function log(ok, found, added, message) {
+  if (!ok) process.exitCode = 1; // any failure shows as a red run in GitHub
   console.log({ ok, found, added, message });
   await updateUsage();
   try {
@@ -135,13 +138,13 @@ async function main() {
   }
   const ps = await (await rest("scans?select=at&ok=eq.true&found=gt.0&order=at.desc&limit=1")).json().catch(() => []);
   const prevScan = Array.isArray(ps) && ps[0]?.at ? new Date(Date.parse(ps[0].at) - 3 * 6e4).toISOString() : null; // start of the "listed between" window
-  let items, apify = false;
-  if (process.env.VINTED_CRAWL === "1") items = await require("./crawl.js").crawlVinted();
+  let items, apify = false, source = "feed";
+  if (process.env.VINTED_CRAWL === "1") { items = await require("./crawl.js").crawlVinted(); source = "crawlee"; }
   else if (clean("APIFY_TOKEN")) {
     const left = await apifyLeft();
     if (left !== null && left < 0.12) return log(false, 0, 0, `Skipped: only $${left.toFixed(2)} of Apify credit left this month`);
-    items = await require("./apify.js").fetchApify(); apify = true;
-  } else if (process.env.VINTED_DIRECT === "1") items = await require("./vinted.js").fetchVinted();
+    items = await require("./apify.js").fetchApify(); apify = true; source = "apify";
+  } else if (process.env.VINTED_DIRECT === "1") { items = await require("./vinted.js").fetchVinted(); source = "approved-feed (vinted.js)"; }
   else {
     if (!VINTED_FEED_URL) return log(false, 0, 0, "Scanner not connected: set APIFY_TOKEN, VINTED_CRAWL=1 or VINTED_FEED_URL");
     const fr = await fetch(VINTED_FEED_URL, { headers: VINTED_FEED_TOKEN ? { authorization: `Bearer ${VINTED_FEED_TOKEN}` } : {} });
@@ -152,12 +155,17 @@ async function main() {
   if (!Array.isArray(prices)) prices = [];
 
   // 1) price every card, keep only real bargains
-  let cands = [], unverified = 0;
+  const rej = {}, bump = r => { rej[r] = (rej[r] || 0) + 1; };
+  let cands = [], priced = 0;
+  if (!items.length) return log(false, 0, 0, `Source "${source}" returned 0 listings, so there was nothing to scan.`);
   for (const i of items) {
-    if (!i.id || !i.title || typeof i.price !== "number" || SKIP.test(i.title)) continue;
-    const mk = await lookup(i.title); if (!mk) continue;
-    if (mk.unverified) { unverified++; continue; }
-    const e = evaluate(i, mk); if (e?.keep) cands.push({ i, mk, row: e.row });
+    if (!i.id || !i.title || typeof i.price !== "number") { bump("bad_listing_fields"); continue; }
+    if (SKIP.test(i.title)) { bump("excluded_word_graded_sealed_or_fake"); continue; }
+    const mk = await lookup(i.title);
+    if (mk.reason) { bump(mk.reason); continue; }
+    priced++;
+    const e = evaluate(i, mk);
+    if (e.keep) cands.push({ i, mk, row: e.row }); else bump(e.reason);
   }
   const ids = cands.map(c => String(c.i.id));
   const ex = ids.length ? await (await rest(`listings?select=external_id,detailed&source=eq.vinted&external_id=in.(${ids.map(encodeURIComponent).join(",")})`)).json() : [];
@@ -172,17 +180,33 @@ async function main() {
         for (const c of pick) {
           const d = det[String(c.i.id)]; if (!d) continue;
           const e = evaluate(c.i, c.mk, d);
-          if (!e || !e.keep) c.drop = true; else c.row = e.row;
+          if (!e.keep) { c.drop = true; bump("after_detail_" + e.reason); } else c.row = e.row;
         }
       } catch (e) { console.error("Detail lookup failed (continuing without):", e.message); }
     }
   }
   cands = cands.filter(c => !c.drop);
-  const basic = cands.filter(c => !c.row.detailed), isOld = c => have.has(String(c.i.id));
-  await upsert(basic.filter(c => isOld(c) && !have.get(String(c.i.id))).map(c => c.row)); // seen before: keep their listing-time fields
+  const id = c => String(c.i.id), basic = cands.filter(c => !c.row.detailed), isOld = c => have.has(id(c));
+  await upsert(basic.filter(c => isOld(c) && !have.get(id(c))).map(c => c.row)); // seen before: keep their listing-time fields
   await upsert(basic.filter(c => !isOld(c)).map(c => ({ ...c.row, listed_after: prevScan }))); // new: listed after the previous scan (estimate)
   await upsert(cands.filter(c => c.row.detailed).map(c => c.row));
-  if (newPrices.length) await rest("market_prices?on_conflict=keyword", { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify(newPrices) });
-  await log(true, items.length, cands.filter(c => !have.has(String(c.i.id))).length, `ok: ${cands.length} deals, ${unverified} skipped (could not verify the card or its price)`);
+  let cacheNote = "";
+  if (newPrices.length) {
+    const mp = await rest("market_prices?on_conflict=keyword", { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify(newPrices) });
+    if (!mp.ok) { cacheNote = "; price cache NOT saved"; console.error("Could not save price cache:", mp.status, await mp.text()); }
+  }
+  // verify: read the rows back from Supabase instead of trusting the write
+  let verified = 0;
+  if (cands.length) {
+    const back = await rest(`listings?select=external_id&source=eq.vinted&external_id=in.(${cands.map(c => encodeURIComponent(id(c))).join(",")})`);
+    const rows = back.ok ? await back.json() : [];
+    verified = Array.isArray(rows) ? rows.length : 0;
+  }
+  const okSave = verified === cands.length;
+  const newN = cands.filter(c => !isOld(c)).length, updN = cands.filter(c => isOld(c) && !have.get(id(c))).length, sameN = cands.filter(c => isOld(c) && have.get(id(c))).length;
+  const rejN = Object.values(rej).reduce((x, y) => x + y, 0), why = Object.entries(rej).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${k} ${v}`).join(", ") || "none";
+  const msg = `source=${source}${items.partial ? " (PARTIAL: the run failed midway, kept what it collected)" : ""}; found ${items.length}; rejected ${rejN} [${why}]; identified+priced ${priced}; deals ${cands.length} (${newN} new, ${updN} updated, ${sameN} unchanged); verified in database ${verified}/${cands.length}${cacheNote}; ${Math.round((Date.now() - T0) / 1000)}s`;
+  if (!okSave) process.exitCode = 1;
+  await log(okSave, items.length, newN, (okSave ? "ok: " : "SAVE VERIFICATION FAILED: ") + msg);
 }
 main().catch(e => log(false, 0, 0, String(e.message || e)).then(() => process.exit(1)));
